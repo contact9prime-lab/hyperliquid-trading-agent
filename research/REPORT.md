@@ -21,7 +21,14 @@ this sandbox.
    they're really worth. Without that premium, the strategy is a coin
    flip with bad downside. With it, you get ~13% per year over 16 years.
 
-3. **What an AI agent should actually do.** The LLM's job isn't to pick
+3. **Vertical spreads on RIL** (bull call & bear put). Win rate is 49–51%
+   — direction is a coin flip. Bear put spread looks attractive (+160%
+   annualised) but only because of put skew (selling the rich OTM put);
+   bull call spread is structurally hurt by the same skew (you have to
+   buy the dear ITM call). Sample is only 38 months and Sharpe ≈ 0.41 —
+   not a slam-dunk, and adds idiosyncratic risk vs the index trade.
+
+4. **What an AI agent should actually do.** The LLM's job isn't to pick
    when or how to sell options — those rules are already known. Its job
    is to **measure today's IV premium live, decide whether to size up,
    skip, or hedge, and exit losers fast**. That requires live option
@@ -128,6 +135,82 @@ With the corrected timing:
 
 ---
 
+## 2b. RIL monthly vertical spreads — does the index playbook transfer?
+
+The user asked whether the analysis works on individual stocks, specifically
+**Reliance Industries**, using two strategies described as:
+
+  * "Sell OTM call, buy ITM call" — this is a **bull call spread** (debit,
+    bullish).
+  * "Sell OTM put, buy ITM put" — this is actually a **bear put spread**
+    (debit, bearish). The label "bull put spread" is normally used for the
+    *credit* combination; the description matches the debit pair, which is
+    what we test.
+
+### Methodology
+
+- Universe: RIL daily OHLC, 2023-01-02 → 2026-03-02 (n = 782, 38 monthly
+  cycles after filtering out one cycle around the 2024 stock split).
+- Entry: first trading day of the calendar month, at close.
+- Exit: monthly expiry (last Thursday before 2025-08-28, last Tuesday
+  after), settled to terminal payoff.
+- Strikes: spot ± 0.5% or 1.0%, snapped to the nearest Rs 10.
+- Pricing: Black-Scholes off trailing 21-day realised vol.
+- Skew variants: NSE equity options have a strong *put skew* (OTM puts
+  trade at a higher IV than ATM). We model this as ±5% on the relevant
+  short leg.
+
+### Results
+
+Returns expressed as % of the **debit paid** (the at-risk capital). The
+"annualised return" assumes a sized 5%-per-cycle allocation, not all-in.
+
+| Variant | Realistic | n | Win % | Mean / cycle | Annualised | Sharpe |
+|---|---|---:|---:|---:|---:|---:|
+| Bull call 0.5% wide, fair value | no | 37 | 49 | −1.9% | −23% | −0.07 |
+| Bull call 1.0% wide, fair value | no | 37 | 49 | −1.1% | −13% | −0.04 |
+| **Bull call 1.0% + skew drag** | **yes** | 37 | 49 | **−9.4%** | **−112%** | **−0.39** |
+| Bear put 0.5% wide, fair value | no | 37 | 51 | +2.8% | +33% | +0.09 |
+| Bear put 1.0% wide, fair value | no | 37 | 51 | +1.6% | +19% | +0.05 |
+| **Bear put 1.0% + skew lift** | **yes** | 37 | 51 | **+13.3%** | **+160%** | **+0.41** |
+
+Underlying RIL stats over the sample: mean −0.18% / month, 49% positive
+months, best +9.1%, worst −12.4%. RIL drifted *down* during this window,
+which inflates the bear-put numbers and hurts the bull-call numbers.
+
+![ril spread equity](output/ril_spread_equity.png)
+
+### What this means in plain English
+
+1. **Picking direction monthly is a coin flip** (49–51% win rate).
+2. **The structural edge isn't direction — it's the put skew.** Selling
+   an OTM put against an ITM put structurally collects the skew premium
+   (bear-put). Buying an ITM call against an OTM call structurally pays
+   the same skew (bull-call). Same skew, opposite sign.
+3. **Variance is brutal** at the cycle level: stdev ≈ 100% of the debit,
+   one bad month = total loss of that cycle's risk capital.
+4. **38 months is not enough** to call the bear-put result a real edge.
+   At Sharpe 0.41 with that variance, t-stat is < 2.5. We'd want 5+
+   years, multiple stocks, and live IV (not assumed skew) before
+   committing capital.
+5. **Moving from index to single-stock adds idiosyncratic risk** —
+   earnings, AGM, oil-price shocks for RIL specifically — without
+   improving Sharpe vs the Nifty short-strangle (1.39 with 15% VRP).
+
+### Practical recommendation
+
+- **Bull call spread on RIL: skip.** Skew works against entry; needs
+  strong directional view to overcome.
+- **Bear put spread on RIL: only as a skew-harvest play, sized small.**
+  Real edge depends on today's actual put skew, not the assumed 5%.
+  Measure it live via Kite option chain, only enter when measured skew
+  ≥ 5% and no earnings inside the holding window.
+- **Index strangle vs single-stock spread**: the index trade has 16
+  years of data, ~3× the Sharpe, more liquidity, and no earnings risk.
+  Run that first.
+
+---
+
 ## 3. So what should an AI agent actually do?
 
 Three discrete loops, each doing one job well. **None of them is a "let
@@ -211,3 +294,4 @@ cached CSV.
 **Data sources** used (since live feeds were unreachable):
 - [manishkr1754 / NIFTY50 daily 2008-2023](https://github.com/manishkr1754/NIFTY50_Data_Analysis_NSETOOLS_NSEPY_Python)
 - [Bhavik-Sheth / validated NSEI daily 2021-2026-01](https://github.com/Bhavik-Sheth/Quant-Project-Info)
+- [YahiyaV / RELIANCE.NS daily 2023-01 to 2026-03](https://github.com/YahiyaV/Stock-Market-Prediction-with-Sentiment-Integration)

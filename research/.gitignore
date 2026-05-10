@@ -1,0 +1,11 @@
+# Cached source data — re-fetchable
+data/
+
+# Large per-row outputs — derivable by re-running scripts.
+# Summary CSVs and PNGs are committed as the report artifacts.
+output/gap_features.csv
+output/short_strangle_weekly.csv
+
+__pycache__/
+*.pyc
+.DS_Store

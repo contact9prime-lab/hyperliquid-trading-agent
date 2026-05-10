@@ -1,0 +1,12 @@
+,value
+rows,3717
+date_min,2008-01-22
+date_max,2023-01-24
+mean_abs_gap_bps,35.52176655932642
+median_abs_gap_bps,23.2551801822245
+p95_abs_gap_bps,109.47310881319703
+p99_abs_gap_bps,217.3103002601841
+pct_gap_up,64.83723432875975
+pct_gap_dn,34.57089050309389
+pct_follow_overall,49.50228679042238
+pct_fill_overall,67.09712133440947

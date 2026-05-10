@@ -1,0 +1,16 @@
+{
+  "n_trades": 235,
+  "win_rate_pct": 69.4,
+  "total_pnl_inr": 405809.0,
+  "starting_capital_inr": 200000.0,
+  "ending_capital_inr": 605809.0,
+  "return_pct": 202.9,
+  "years_simulated": 17.48,
+  "cagr_pct": 6.54,
+  "annualised_sharpe": 2.57,
+  "tripwire_firings_pct": 8.9,
+  "worst_trade_inr": -18264.0,
+  "best_trade_inr": 13689.0,
+  "first_trade": "2008-05-09",
+  "last_trade": "2025-11-02"
+}

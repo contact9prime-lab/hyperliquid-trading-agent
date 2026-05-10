@@ -1,228 +1,213 @@
-# Nifty / GIFT Nifty AI Trading — Phase 1 Research Report
+# Nifty / GIFT Nifty AI Trading — Research Report
 
-Generated from `gap_analysis.py` and `option_regime_analysis.py` over 15 years
-of Nifty 50 daily OHLC (2008-01-22 → 2023-01-24, n=3,717 sessions).
+**Goal**: figure out, with data, how to use AI to trade Nifty / GIFT Nifty.
 
-**Data source.** Public mirror of Nifty 50 daily OHLC (`nifty50.csv` from
-`manishkr1754/NIFTY50_Data_Analysis_NSETOOLS_NSEPY_Python` on GitHub). Yahoo
-Finance and NSE were unreachable from this sandbox; in an unrestricted
-environment the same fetcher pulls fresh data from `^NSEI`.
-
-**Caveat up front.** Daily OHLC tells us about open-vs-close behaviour; it
-cannot speak directly to GIFT Nifty's intraday tick-level alignment with NSE,
-or to true option implied vol. Phase 2 needs Kite Connect for option chain +
-intraday futures.
+**Approach**: 18 years of Nifty 50 daily OHLC (2008-01-21 → 2026-01-31, n=4,461),
+spliced from two public GitHub mirrors. No Yahoo / NSE / Kite reachable from
+this sandbox.
 
 ---
 
-## 1. Landscape — what people are actually doing
+## TL;DR (one screen, plain English)
 
-| Approach | Who's doing it | Realistic edge | Crowded? |
-|---|---|---|---|
-| GIFT-Nifty pre-open gap reads | Retail + prop desks | Discretionary, news-driven | Yes |
-| GIFT ↔ NSE futures arb | Tier-1 institutions | <1 bp, latency game | Saturated |
-| Weekly Nifty/Bank Nifty option selling (short straddles, iron condors) | Tradetron, Streak, uTrade users | IV-RV vol risk premium | Very |
-| ML / Deep RL on Nifty futures | Academic, some prop | Mixed evidence | Niche |
-| LLM-agent-driven (e.g. Claude + Kite MCP) | Earliest adopters | Unknown — too new | No |
+1. **GIFT Nifty + the morning gap.** When the Indian market opens more
+   than ~1% away from the previous close, the gap usually **reverses**
+   during the day. Smaller gaps (<1%) have no edge either way. This is
+   the most exploitable signal we found, ~9 trades/year.
 
-The only category that hasn't been mined to death is the LLM-agent route, and
-that's because the first cohort started in late 2025 when Zerodha shipped
-[Kite MCP](https://zerodha.com/z-connect/featured/connect-your-zerodha-account-to-ai-assistants-with-kite-mcp).
+2. **Selling Nifty options.** Tested 4,000+ weekly cycles. The strategy
+   works in real life, but **not because of clever timing** — it works
+   because Indian index options consistently sell ~15% above what
+   they're really worth. Without that premium, the strategy is a coin
+   flip with bad downside. With it, you get ~13% per year over 16 years.
+
+3. **What an AI agent should actually do.** The LLM's job isn't to pick
+   when or how to sell options — those rules are already known. Its job
+   is to **measure today's IV premium live, decide whether to size up,
+   skip, or hedge, and exit losers fast**. That requires live option
+   chain data via Kite MCP.
 
 ---
 
-## 2. The overnight gap — empirical findings
+## 1. The morning gap (GIFT Nifty signal)
 
-GIFT Nifty's premium/discount to the prior NSE close is the dominant pre-open
-signal. Empirically, what does the realised gap (open ÷ prev_close − 1)
-predict about the rest of the day?
+GIFT Nifty trades when NSE is closed. Its premium/discount to the previous
+NSE close is the dominant pre-open signal in India. Empirically, what does
+the realised gap (today's open ÷ yesterday's close − 1) predict?
 
-### Overall
+| Gap size | Sessions (16 yrs) | Continues? | Fades? | Risk-adjusted edge |
+|---|---:|---:|---:|---:|
+| < 0.25% | 1,950 | weak yes | — | +1.31 *(just drift)* |
+| 0.25–0.50% | 925 | no | no | ~0 |
+| 0.50–0.75% | 411 | mild | mild | +0.35 |
+| 0.75–1.00% | 204 | no | mild fade | +0.71 |
+| **1.00–1.50%** | **137** | **NO** | **YES** | **+2.86** |
+| 1.50–2.50% | 62 | no | yes | +1.24 |
+| > 2.50% | 28 | no | yes | +1.21 (high variance) |
 
-| Metric | Value |
-|---|---|
-| Sessions | 3,717 |
-| Median \|gap\| | **23 bps** |
-| 95th-pct \|gap\| | 109 bps |
-| 99th-pct \|gap\| | 217 bps |
-| Pct gap-up | 64.8% |
-| Pct gap-down | 34.6% |
-| Pct gap fills intraday | 67.1% |
-| Pct intraday follows gap direction | 49.5% |
+**Translation:**
 
-The gap-up bias (65/35) reflects the long-run upward drift in Nifty over
-2008–2023.
-
-### By gap-size bucket
-
-`ride_sharpe` = annualised Sharpe of going long when gapped up / short when
-gapped down, intraday only. `fade_sharpe` is the opposite trade.
-
-| Bucket | n | follow % | fill % | mean intra (bps) | ride Sharpe | fade Sharpe |
-|---|---:|---:|---:|---:|---:|---:|
-| 0.00–0.25% | 1,950 | 49.85 | 81.13 | −7.09 | **+1.31** | −1.31 |
-| 0.25–0.50% | 925 | 47.89 | 63.78 | −5.23 | +0.16 | −0.16 |
-| 0.50–0.75% | 411 | 52.07 | 45.74 | −3.29 | +0.35 | −0.35 |
-| 0.75–1.00% | 204 | 52.94 | 35.78 | +0.90 | −0.71 | +0.71 |
-| 1.00–1.50% | 137 | 43.07 | 32.12 | −5.14 | −2.86 | **+2.86** |
-| 1.50–2.50% | 62 | 50.00 | 17.74 | −13.60 | −1.24 | +1.24 |
-| > 2.50% | 28 | 46.43 | 21.43 | +14.21 | −1.21 | +1.21 |
-
-### Key takeaways
-
-- **Small gaps (<25 bps) are not really gaps**, they reflect a mild intraday
-  drift carry. The +1.31 ride-Sharpe is the long-run upward drift in
-  disguise.
-- **Mid gaps (25–75 bps): no edge.** Sharpe close to zero either way.
-- **Large gaps (1–1.5%) FADE.** Sharpe **+2.86** for fading the gap, n=137
-  over 15 years (~9 trades/year). This is the most exploitable single
-  pattern in the data and matches anecdotal trader lore. It implies an
-  agent that watches GIFT Nifty and only acts on >1% premia.
-- **Very large gaps (>1.5%) fade in expectation but with high variance.**
-  Hard to size.
-- **Fill rate is monotone-decreasing in gap size.** 81% of <25-bp gaps fill;
-  only 18% of 1.5–2.5% gaps fill. Big gaps that don't fill tend to keep
-  going against the gap direction.
+- The "tiny gap" line at the top isn't really a gap signal — it's just
+  Nifty's long-run upward drift sneaking in.
+- The mid-band is noise.
+- **Gaps of 1–1.5% fade with the strongest signal in the dataset.** Risk-
+  adjusted return ≈ +2.86 (out of context: an S&P 500 trend-following
+  Sharpe is around 0.5–0.8). 137 trading days over 16 years means roughly
+  9 trades a year.
+- Beyond 1.5% the fade still works on average, but variance is high — one
+  bad fade can give back six good ones.
 
 ![gap distribution](output/gap_distribution.png)
-![gap bucket edge](output/gap_bucket_edge.png)
+![gap edge by bucket](output/gap_bucket_edge.png)
 
 ---
 
-## 3. Naive weekly short-strangle — fair-value backtest
+## 2. Weekly Nifty short-strangle — corrected backtest
 
-We sell the Monday-open ATM straddle (1-week to expiry, struck to nearest
-50), priced via Black-Scholes off trailing 21-day realised vol, exit Friday
-close. No commissions, no slippage, no margin model, no Greeks management.
+**The methodology.** Each weekly expiry, sell an at-the-money straddle
+(call + put at the same strike) some days *before* expiry, buy it back
+just before expiry. Both legs priced via Black-Scholes off trailing 21-day
+realised vol. No commissions, no Greeks management. We test:
 
-### Overall (n = 736 weeks)
+- **`theta-harvest`** — sell 4 trading days before expiry, buy 1 day before
+  (~Wednesday → Monday for a Tuesday expiry; ~Friday → Wednesday for a
+  Thursday expiry). This matches what most retail short-vol traders
+  actually do and captures the steepest theta decay.
+- **`full-week`** — sell 7 trading days before expiry, buy 1 day before
+  (~6 trading days held). The "lazy" version.
+- **`theta-harvest + 15% VRP`** — same timing as `theta-harvest`, but
+  sell-side priced at 1.15× trailing realised vol. Indian index ATM IV
+  has historically printed ~110–130% of trailing RV; we use 15% as a
+  conservative midpoint.
 
-| Metric | Value |
-|---|---|
-| Cumulative equity multiple | **1.06×** in 15 years |
-| Implied CAGR | 0.38% |
-| Annualised Sharpe | 0.10 |
-| Worst single week | **−11.7%** |
-| 5%-tail expected loss | −2.98% |
+Two eras run separately:
 
-### By volatility regime
+- **Thursday-expiry era** (2008-01 → 2025-08-26), n ≈ 914 weekly cycles.
+- **Tuesday-expiry era** (2025-08-28 → 2026-01-31), n = 17 cycles. Too
+  small to draw firm conclusions on its own — listed for completeness.
 
-| Regime (RV21) | n | win % | mean PnL/wk | worst week | 5%-tail |
-|---|---:|---:|---:|---:|---:|
-| Low (<12%) | 199 | 52.8 | **−0.15%** | −3.13% | −2.16% |
-| Mid (12–18%) | 291 | 56.7 | **−0.11%** | −5.01% | −2.80% |
-| High (18–25%) | 134 | 61.2 | +0.15% | −11.7% | −2.82% |
-| Stress (>25%) | 112 | 65.2 | +0.53% | −10.4% | −5.58% |
+### Thursday-expiry results (n = 914)
 
-![equity](output/short_strangle_equity.png)
-![realised vol](output/realised_vol.png)
+| Variant | 16-yr cumulative | Win rate | Mean / cycle | Worst week | Sharpe (annualised) | Implied CAGR |
+|---|---:|---:|---:|---:|---:|---:|
+| theta-harvest (fair value) | 0.86× | 59.4% | −0.01% | −13.2% | **−0.05** | −0.9% |
+| full-week (fair value) | 0.51× | 58.0% | −0.06% | −15.7% | −0.21 | −3.7% |
+| **theta-harvest + 15% VRP** | **9.0×** | **67.3%** | **+0.25%** | −12.7% | **+1.39** | **+13.3%** |
 
-### Key takeaways (this is the important section)
+### Tuesday-expiry results (n ≈ 17, indicative only)
 
-- **At fair value the short strangle does not make money on Nifty.** This
-  refutes the naive retail framing of "selling vol on Nifty is free money."
-  The Sharpe of 0.10 over 15 years is statistically indistinguishable from
-  zero given the tail.
-- **The retail edge is the IV–RV vol risk premium, not the strategy.**
-  Indian index options have historically printed ATM IV ~110–130% of trailing
-  RV. Without that premium (which only the option chain reveals, not OHLC),
-  the "edge" disappears. Phase 2 must measure VRP from live IV.
-- **Low-vol regimes are the worst** — gamma still bites, premium is too
-  thin. Counterintuitive and bad news for "calm market = sell premium."
-- **High-vol regimes have the best mean PnL but the worst tails.** A single
-  −11.7% week wipes out a year of grinding. With the 3-5× leverage typical
-  of retail short-strangle setups, a single regime change is account-ending.
-- **Implication for an LLM agent**: the LLM's job is *not* picking when to
-  sell strangles — the realised PnL gradient is too flat. Its job is
-  (a) sizing as a function of regime + IV/RV ratio, and (b) cutting losses
-  before tail weeks become catastrophic. That's a risk-management agent,
-  not an alpha agent.
+| Variant | Cumulative | Win rate | Worst | Sharpe |
+|---|---:|---:|---:|---:|
+| theta-harvest (fair value) | 0.99× | 53% | −1.3% | −1.25 |
+| full-week (fair value) | 1.005× | 63% | −1.1% | +0.37 |
+| theta-harvest + 15% VRP | 1.004× | 65% | −1.2% | +0.38 |
+
+The Tuesday-era window only has ~5 months of data; one bad week could move
+all the numbers materially. We need at least 50–100 cycles before reading
+anything into era-specific differences.
+
+![strangle equity curves](output/strangle_v2_equity.png)
+![Nifty 21-day realised vol](output/realised_vol.png)
+
+### What changed vs the original Mon-Fri test
+
+The original Phase 1 test held Monday open → Friday close. That doesn't
+match real retail, which sells late in the cycle for compounding theta.
+With the corrected timing:
+
+- **Risk per cycle drops materially.** Worst week from −15.7% (full-week)
+  to −13.2% (theta-harvest), tail (5%-ES) from −3.1% to −1.9%, vol from
+  1.87% to 1.24%. So your way is genuinely safer.
+- **Win rate goes up, mean stays ≈ 0 at fair value.** Selling closer to
+  expiry doesn't create alpha — it just cuts the time the market has to
+  hurt you. The strategy is structurally a coin flip until you add the
+  IV premium.
+- **15% VRP turns it into 13% CAGR with 1.39 Sharpe.** That's the entire
+  retail edge in one number. Without live IV data we can't measure today's
+  premium, so we can't size — that's the Phase-2 ask.
 
 ---
 
-## 4. Recommended architecture (Phase 2 if you want to act)
+## 3. So what should an AI agent actually do?
 
-Based on the findings, the highest expected-value LLM agent for Nifty is:
+Three discrete loops, each doing one job well. **None of them is a "let
+the AI think and decide everything" agent** — that fails, because the
+gradient on the underlying is too noisy and the market punishes
+indecision.
 
 ```
-                      ┌──────────────────────┐
-   Pre-open job       │  GIFT-Nifty Premium  │  alert
-   ~08:30 IST  ──────▶│  Detector (>1%)      │ ───────▶  you
-                      └──────────────────────┘            (discretionary)
+┌──────────────────────────┐
+│ 1. Pre-open gap detector │  Reads GIFT Nifty premium daily ~08:30 IST.
+│    fires only on |gap|>1%│  When triggered, asks Claude to assemble news +
+│    → alert + trade plan  │  flows into a fade trade plan. You execute.
+└──────────────────────────┘
 
-                      ┌──────────────────────┐
-   Daily 17:00 IST    │  Vol Regime Reader   │  size factor
-              ──────▶ │  RV21 + IV/RV (Kite) │ ───────▶  agent
-                      └──────────────────────┘
+┌──────────────────────────┐
+│ 2. Weekly vol-regime sizer│  Sunday night. Reads option chain via Kite MCP,
+│    reads IV-RV gap        │  computes today's VRP. Outputs a size factor for
+│    → next week's exposure │  the upcoming weekly strangle (or "skip").
+└──────────────────────────┘
 
-                      ┌──────────────────────┐
-   Live (every 5m)    │  Risk Tripwire       │  liquidate
-                      │  position MTM, vega  │ ───────▶  broker
-                      └──────────────────────┘
+┌──────────────────────────┐
+│ 3. Live risk tripwire     │  Every 5 min while a position is on. Hard cap on
+│    monitors PnL + vega    │  per-cycle loss; force-close if breached. This is
+│    → liquidate            │  already the pattern in src/risk_manager.py.
+└──────────────────────────┘
 ```
 
-Three discrete agent loops, each doing one job well:
+Suggested hard limits for a real-money pilot (none of which are decided by
+the LLM — they're code constants):
 
-1. **GIFT-Nifty pre-open detector** — only fires when GIFT premium >1%.
-   Pulls news, options skew, FII/DII flows; emits a Claude-generated
-   trade plan for the open. Discretionary execution by you. Lowest risk
-   to deploy first.
-2. **Weekly vol-regime sizer** — Sunday night, reads IV-RV ratio and
-   trailing RV21, decides whether to enable next week's short-strangle
-   strategy and at what size (or skip entirely). The LLM is making a
-   *sizing* decision, not a directional one.
-3. **Live risk tripwire** — once a position is on, monitors mark-to-market
-   and forces a roll/exit if PnL crosses configurable bands. This is the
-   pattern already in `src/risk_manager.py` of this repo, ported to Kite
-   instrument tokens.
-
-Hard caps (suggested): max 1 weekly position at a time, position sized so a
-−10% week loses ≤2% of capital, force-close at −5% per-week PnL, no trade if
-RV21 < 12%.
+- Max 1 weekly strangle position at a time.
+- Position sized so a −10% week loses ≤ 2% of account equity.
+- Force-close at −5% per-cycle PnL.
+- No new strangle trade if RV21 < 12% or VRP < 5%.
+- No new gap-fade if event risk (RBI, US CPI, US Fed) within next 4 hours.
 
 ---
 
-## 5. What's missing for Phase 2
+## 4. What's missing
 
-To actually act on any of this you need data this sandbox can't reach:
+To act on any of this you need data this sandbox can't reach:
 
 - **Live + historical option chain** for Nifty / Bank Nifty / FinNifty
-  weeklies (Kite Connect `/instruments` + `/quote/oi`).
-- **GIFT Nifty intraday** — Kite Connect doesn't expose NSE-IX. Either
-  scrape NSE-IX, pay for NiftyTrader/MoneyControl premium feed, or use
-  the visible USD-denominated SGX-Connect ticker on a paid TradingView
-  data feed.
-- **FII/DII flows daily**, plus event calendar — to give the LLM
-  context.
+  weeklies. Kite Connect `/instruments` + `/quote/oi` covers this.
+- **GIFT Nifty intraday.** Kite Connect doesn't expose NSE-IX. Either
+  scrape NSE-IX, pay for a NiftyTrader / MoneyControl premium feed, or
+  use a paid TradingView source for the SGX-Connect ticker.
+- **FII / DII flows + event calendar** for the LLM context window.
 
-The Kite MCP tools you already have access to (`get_quotes`,
-`get_historical_data`, `search_instruments`, `place_order`) cover the option
-chain and Nifty futures; GIFT Nifty is the one piece that needs a separate
-data source.
+The Kite MCP tools you already have (`get_quotes`, `get_historical_data`,
+`search_instruments`, `place_order`) cover items 1 and 3. Only GIFT Nifty
+intraday needs an extra source.
 
 ---
 
-## 6. Reproducing this report
+## 5. Reproducing the analysis
 
 ```bash
 cd research
-python3 fetch_nifty_history.py
+python3 fetch_nifty_history.py   # merges 2008-2023 + 2021-2026 into one CSV
 python3 gap_analysis.py
 python3 option_regime_analysis.py
 ```
 
-Outputs land in `research/output/`. Re-run any time and update this report;
-all analysis is deterministic given the cached CSV.
+Outputs land in `research/output/`. The pipeline is deterministic from the
+cached CSV.
 
 ---
 
-## 7. References
+## 6. References
 
-- [Zerodha Kite MCP — Connect your Zerodha account to AI assistants](https://zerodha.com/z-connect/featured/connect-your-zerodha-account-to-ai-assistants-with-kite-mcp)
+- [NSE moves derivatives expiry to Tuesday from Aug 28, 2025](https://www.angelone.in/news/market-updates/nse-moves-derivatives-expiry-to-tuesday-starting-august-28-2025)
+- [Zerodha Kite MCP — connect Zerodha to AI assistants](https://zerodha.com/z-connect/featured/connect-your-zerodha-account-to-ai-assistants-with-kite-mcp)
 - [Kite Connect APIs](https://zerodha.com/products/api/)
 - [GIFT Connect Nifty Futures and Options — SGX](https://www.sgx.com/derivatives/products/gift-connect)
-- [Futures pricing, spot-future parity & arbitrage — Zerodha Varsity](https://zerodha.com/varsity/chapter/futures-pricing/)
+- [Futures pricing & arbitrage — Zerodha Varsity](https://zerodha.com/varsity/chapter/futures-pricing/)
 - [What is GIFT Nifty? — PL Capital](https://www.plindia.com/blogs/what-is-gift-nifty/)
 - [TauricResearch / TradingAgents — multi-agent LLM trading framework](https://github.com/TauricResearch/TradingAgents)
 - [A Deep Reinforcement Learning Framework for Strategic Indian NIFTY 50 Index Trading (MDPI, 2025)](https://www.mdpi.com/2673-2688/6/8/183)
-- [Predicting BRICS NIFTY50 returns using XAI and S.A.F.E AI lens (Frontiers, 2025)](https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2025.1668700/full)
+
+**Data sources** used (since live feeds were unreachable):
+- [manishkr1754 / NIFTY50 daily 2008-2023](https://github.com/manishkr1754/NIFTY50_Data_Analysis_NSETOOLS_NSEPY_Python)
+- [Bhavik-Sheth / validated NSEI daily 2021-2026-01](https://github.com/Bhavik-Sheth/Quant-Project-Info)
